@@ -1,3 +1,16 @@
+import threading
+import http.server
+import socketserver
+
+def run_fake_server():
+    PORT = 8080
+    Handler = http.server.SimpleHTTPRequestHandler
+    with socketserver.TCPServer(("", PORT), Handler) as httpd:
+        print(f"Serving fake HTTP server on port {PORT}")
+        httpd.serve_forever()
+
+threading.Thread(target=run_fake_server, daemon=True).start()
+
 import os
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler

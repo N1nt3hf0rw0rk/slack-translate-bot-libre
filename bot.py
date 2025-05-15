@@ -30,7 +30,7 @@ LANGUAGE_EMOJIS = {
 def translate(text, target_lang):
     try:
         resp = requests.post(
-            "https://translate.argosopentech.com/translate",
+            "https://libretranslate.com/translate",
             data={
                 "q": text,
                 "source": "auto",

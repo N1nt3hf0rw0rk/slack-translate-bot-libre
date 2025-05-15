@@ -22,14 +22,10 @@ handler = SlackRequestHandler(app)
 flask_app = Flask(__name__)
 
 # Емодзі → мова
-EMOJI_TO_LANG = {
-    "repeat": "uk",
-    "gb": "en",
-    "flag-gb": "en",
-    "🇬🇧": "en",
-    "ru": "ru",
-    "flag-ru": "ru",
-    "🇷🇺": "ru",
+emoji_to_lang = {
+    "uk": "ukrainian",
+    "gb": "english",
+    "ru": "russian",
 }
 
 @app.event("reaction_added")

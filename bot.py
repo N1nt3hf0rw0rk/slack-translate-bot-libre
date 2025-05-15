@@ -7,7 +7,7 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 from slack_sdk.errors import SlackApiError
 import openai
 
-# Запуск фейкового HTTP сервера для Render
+# Запускаємо фейковий HTTP сервер (обхід Render портів)
 def run_fake_server():
     PORT = 8080
     Handler = http.server.SimpleHTTPRequestHandler
@@ -17,29 +17,28 @@ def run_fake_server():
 
 threading.Thread(target=run_fake_server, daemon=True).start()
 
-# Ініціалізація бота Slack
-SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
-SLACK_APP_TOKEN = os.environ.get("SLACK_APP_TOKEN")
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-
-if not SLACK_BOT_TOKEN or not SLACK_APP_TOKEN or not OPENAI_API_KEY:
-    print("Error: One or more environment variables are missing: SLACK_BOT_TOKEN, SLACK_APP_TOKEN, OPENAI_API_KEY")
-    exit(1)
-
-openai.api_key = OPENAI_API_KEY
-
-app = App(token=SLACK_BOT_TOKEN)
-
-# Словник мови відповідно до емодзі реакцій
+# Словник емоджі до коду мов ISO
 EMOJI_TO_LANG = {
-    "gb": "English",
-    "uk": "Ukrainian",
-    "ru": "Russian"
+    "gb": "en",
+    "uk": "uk",
+    "ru": "ru",
 }
 
-def translate_text(text: str, target_lang: str) -> str:
+# Відповідність коду мови до людської назви
+LANG_CODE_TO_NAME = {
+    "en": "English",
+    "uk": "Ukrainian",
+    "ru": "Russian",
+}
+
+# Ініціалізація Slack app
+app = App(token=os.environ.get("SLACK_BOT_TOKEN"))
+openai.api_key = os.environ.get("OPENAI_API_KEY")
+
+def translate_text(text: str, target_lang_code: str) -> str:
     try:
-        prompt = f"Translate this text into {target_lang}:\n\n{text}"
+        lang_name = LANG_CODE_TO_NAME.get(target_lang_code, target_lang_code)
+        prompt = f"Please translate the following text into {lang_name} language:\n\n{text}"
         response = openai.ChatCompletion.create(
             model="gpt-4o-mini",
             messages=[
@@ -55,41 +54,43 @@ def translate_text(text: str, target_lang: str) -> str:
         print(f"Error during translation: {e}")
         return None
 
+# Слухаємо реакції на повідомлення
 @app.event("reaction_added")
-def handle_reaction_added(event, client):
-    reaction = event.get("reaction")
-    user_id = event.get("user")
-    item = event.get("item", {})
-    channel = item.get("channel")
-    ts = item.get("ts")
+def handle_reaction(event, client):
+    emoji = event.get("reaction")
+    user_who_reacted = event.get("user")
+    item = event.get("item")
+    channel_id = item.get("channel")
+    message_ts = item.get("ts")
 
-    if reaction not in EMOJI_TO_LANG:
-        return  # Ігноруємо нецільові реакції
+    if emoji not in EMOJI_TO_LANG:
+        return
 
-    target_lang = EMOJI_TO_LANG[reaction]
+    target_lang_code = EMOJI_TO_LANG[emoji]
 
     try:
-        # Отримуємо оригінальне повідомлення
-        result = client.conversations_history(channel=channel, latest=ts, limit=1, inclusive=True)
+        # Отримуємо оригінальний текст повідомлення
+        result = client.conversations_history(channel=channel_id, latest=message_ts, inclusive=True, limit=1)
         messages = result.get("messages", [])
         if not messages:
+            print("No message found for translation.")
             return
-
-        original_text = messages[0].get("text")
+        original_text = messages[0].get("text", "")
         if not original_text:
+            print("Original message has no text.")
             return
 
-        # Переклад
-        translated_text = translate_text(original_text, target_lang)
-        if not translated_text:
+        translation = translate_text(original_text, target_lang_code)
+        if translation is None:
+            print("Translation failed.")
             return
 
-        # Відправляємо переклад користувачу у приват
-        client.chat_postMessage(channel=user_id, text=f":repeat: Переклад ({target_lang}):\n{translated_text}")
+        # Надсилаємо переклад у приватні повідомлення користувачу, який поставив реакцію
+        client.chat_postMessage(channel=user_who_reacted, text=f":repeat: Переклад ({target_lang_code}):\n{translation}")
 
     except SlackApiError as e:
-        print(f"Slack API Error: {e.response['error']}")
+        print(f"Slack API error: {e.response['error']}")
 
 if __name__ == "__main__":
-    handler = SocketModeHandler(app, SLACK_APP_TOKEN)
+    handler = SocketModeHandler(app, os.environ.get("SLACK_APP_TOKEN"))
     handler.start()

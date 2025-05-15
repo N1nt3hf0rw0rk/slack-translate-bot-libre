@@ -29,22 +29,26 @@ LANGUAGE_EMOJIS = {
 # Функція перекладу через LibreTranslate
 def translate(text, target_lang):
     try:
-        resp = requests.post(
-            "https://libretranslate.com/translate",
-            json={
-                "q": text,
-                "source": "auto",
-                "target": target_lang,
-                "format": "text"
-            },
-            headers={"Content-Type": "application/json"},
-            timeout=5
-        )
-        resp.raise_for_status()
-        return resp.json().get("translatedText", "[Translation failed]")
+        url = "https://libretranslate.com/translate"
+        headers = {
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "q": text,
+            "source": "auto",
+            "target": target_lang,
+            "format": "text"
+        }
+
+        response = requests.post(url, headers=headers, json=payload, timeout=10)
+
+        # Додай логування для діагностики
+        if response.status_code != 200:
+            return f"[Translation error: {response.status_code} - {response.text}]"
+
+        return response.json().get("translatedText", "[Translation failed]")
     except Exception as e:
         return f"[Translation error: {e}]"
-
 
 # Обробник події додавання емодзі
 @app.event("reaction_added")

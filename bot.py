@@ -31,18 +31,20 @@ def translate(text, target_lang):
     try:
         resp = requests.post(
             "https://libretranslate.com/translate",
-            data={
+            json={
                 "q": text,
                 "source": "auto",
                 "target": target_lang,
                 "format": "text"
             },
+            headers={"Content-Type": "application/json"},
             timeout=5
         )
         resp.raise_for_status()
         return resp.json().get("translatedText", "[Translation failed]")
     except Exception as e:
         return f"[Translation error: {e}]"
+
 
 # Обробник події додавання емодзі
 @app.event("reaction_added")

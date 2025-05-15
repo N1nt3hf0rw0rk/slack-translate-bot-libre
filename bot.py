@@ -1,15 +1,32 @@
 import os
+import logging
 import threading
 import http.server
 import socketserver
-import requests
-import deepl
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from slack_sdk import WebClient
-from slack_sdk.errors import SlackApiError
+from openai import OpenAI
+from dotenv import load_dotenv
 
-# --- Fake HTTP server for Render ---
+# Load environment variables
+load_dotenv()
+
+SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
+SLACK_APP_TOKEN = os.getenv("SLACK_APP_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+app = App(token=SLACK_BOT_TOKEN)
+openai = OpenAI(api_key=OPENAI_API_KEY)
+
+# Emoji to language mapping
+EMOJI_LANG_MAP = {
+    ":repeat:": "UK",      # Ukrainian
+    ":gb:": "EN-GB",       # English (British)
+    ":ru:": "RU"            # Russian
+}
+
+# Start fake HTTP server (for Render port binding workaround)
 def run_fake_server():
     PORT = 8080
     Handler = http.server.SimpleHTTPRequestHandler
@@ -19,62 +36,59 @@ def run_fake_server():
 
 threading.Thread(target=run_fake_server, daemon=True).start()
 
-# --- DeepL Translator ---
-DEEPL_API_KEY = os.environ.get("DEEPL_API_KEY")
-translator = deepl.Translator(auth_key=DEEPL_API_KEY)
+# Translation via ChatGPT API
+def translate_with_chatgpt(text, target_lang):
+    prompt = f"Translate this into {target_lang}:
+" + text
+    try:
+        response = openai.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "You are a helpful translator."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        translation = response.choices[0].message.content.strip()
+        return translation
+    except Exception as e:
+        logging.error(f"Translation error: {e}")
+        return "⚠️ Error during translation."
 
-# --- Slack App ---
-app = App(token=os.environ.get("SLACK_BOT_TOKEN"))
-client = WebClient(token=os.environ.get("SLACK_BOT_TOKEN"))
-
-# --- Emoji to language code mapping ---
-EMOJI_LANGUAGE_MAP = {
-    "ua": "UA",  # Ukrainian
-    "flag-gb": "EN-GB",  # English (British flag)
-    "us": "EN-US",     # ✅ Альтернатива
-    "ru": "RU",  # Russian
-}
-
+# Reaction handler
 @app.event("reaction_added")
-def handle_reaction_added(event, say, logger):
-    reaction = event.get("reaction")
-    item = event.get("item")
-    user = event.get("user")
+def handle_reaction_added(body, say, client: WebClient):
+    event = body.get("event", {})
+    reaction = f":{event.get('reaction')}:"
 
-    if reaction not in EMOJI_LANGUAGE_MAP:
-        return  # Ignore unrelated reactions
+    if reaction not in EMOJI_LANG_MAP:
+        return
+
+    target_lang = EMOJI_LANG_MAP[reaction]
+    item = event.get("item", {})
+
+    if item.get("type") != "message":
+        return
 
     try:
-        # Get original message
-        response = client.conversations_history(
-            channel=item["channel"],
-            inclusive=True,
-            latest=item["ts"],
-            limit=1
-        )
+        channel = item.get("channel")
+        message_ts = item.get("ts")
+        user = event.get("user")
 
-        if not response["messages"]:
+        result = client.conversations_history(channel=channel, latest=message_ts, inclusive=True, limit=1)
+        messages = result.get("messages", [])
+        if not messages:
             return
 
-        original_text = response["messages"][0].get("text", "")
+        original_text = messages[0].get("text", "")
         if not original_text:
             return
 
-        target_lang = EMOJI_LANGUAGE_MAP[reaction]
+        translated_text = translate_with_chatgpt(original_text, target_lang)
 
-        # Translate
-        result = translator.translate_text(original_text, target_lang=target_lang)
-
-        # Send as private message
-        client.chat_postMessage(
-            channel=user,
-            text=f":repeat: Переклад ({target_lang.lower()}):\n{result.text}"
-        )
-
-    except SlackApiError as e:
-        logger.error(f"Slack API error: {e.response['error']}")
+        client.chat_postMessage(channel=user, text=f"*Переклад ({target_lang}):*\n{translated_text}")
     except Exception as e:
-        logger.error(f"Error during translation: {str(e)}")
+        logging.error(f"Error handling reaction: {e}")
 
 if __name__ == "__main__":
-    SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"]).start()
+    handler = SocketModeHandler(app, SLACK_APP_TOKEN)
+    handler.start()

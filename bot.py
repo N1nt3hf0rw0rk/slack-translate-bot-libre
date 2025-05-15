@@ -27,9 +27,9 @@ def health_check():
 
 # Emoji-to-language map
 EMOJI_TO_LANG = {
-    ":gb:": "English",
+    "gb": "English",
     "flag-ua": "Ukrainian language",
-    ":ru:": "Russian"
+    "ru": "Russian"
 }
 
 @app.event("reaction_added")

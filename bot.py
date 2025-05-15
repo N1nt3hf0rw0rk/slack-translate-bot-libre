@@ -29,7 +29,7 @@ LANGUAGE_EMOJIS = {
 # Функція перекладу через LibreTranslate
 def translate(text, target_lang):
     try:
-        url = "https://libretranslate.com/translate"
+        url = "https://translate.astian.org/translate"
         headers = {
             "Content-Type": "application/json",
         }

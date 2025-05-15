@@ -1,82 +1,89 @@
 import os
-import logging
-import threading
-import http.server
-import socketserver
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
+from slack_sdk.web import WebClient
+from flask import Flask, request
+from threading import Thread
 from openai import OpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# Логування
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
+SLACK_APP_TOKEN = os.environ.get("SLACK_APP_TOKEN")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+PORT = int(os.environ.get("PORT", 8080))
 
-# Запускаємо фейковий HTTP-сервер для Render (порт 8080)
-def run_fake_server():
-    PORT = 8080
-    Handler = http.server.SimpleHTTPRequestHandler
-    with socketserver.TCPServer(("", PORT), Handler) as httpd:
-        print(f"Serving fake HTTP server on port {PORT}")
-        httpd.serve_forever()
+# Slack + OpenAI setup
+app = App(token=SLACK_BOT_TOKEN)
+openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
-threading.Thread(target=run_fake_server, daemon=True).start()
+# Flask web app for Render port binding
+flask_app = Flask(__name__)
 
-# Slack App
-app = App(token=os.environ.get("SLACK_BOT_TOKEN"))
-openai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+@flask_app.route("/", methods=["GET"])
+def health_check():
+    return "Slack translation bot is running!", 200
 
-# Emoji -> target language mapping
-EMOJI_LANG_MAP = {
-    ":gb:": "English",
-    ":ukraine:": "Ukrainian",
-    ":ru:": "Russian"
+# Emoji-to-language map
+EMOJI_TO_LANG = {
+    "gb": "English",
+    "ua": "Ukrainian",
+    "ru": "Russian"
 }
 
-# Обробка emoji-реакцій
 @app.event("reaction_added")
-def handle_reaction_added(event, client, say, logger):
+def handle_reaction_added(body, say, client: WebClient, logger):
+    event = body.get("event", {})
+    reaction = event.get("reaction")
+    item = event.get("item", {})
+    user = event.get("user")
+
+    logger.info(f"Reaction received: {reaction} from user {user}")
+
+    if reaction not in EMOJI_TO_LANG:
+        logger.info(f"Unsupported reaction: {reaction}")
+        return
+
+    target_lang = EMOJI_TO_LANG[reaction]
+    channel_id = item.get("channel")
+    message_ts = item.get("ts")
+
     try:
-        emoji = f":{event['reaction']}:">
-        logger.info(f"Reaction received: {emoji}")
+        result = client.conversations_history(channel=channel_id, latest=message_ts, limit=1, inclusive=True)
+        original_message = result["messages"][0].get("text", "")
+        logger.info(f"Original message: {original_message}")
+    except Exception as e:
+        logger.error(f"Error fetching original message: {e}")
+        return
 
-        if emoji not in EMOJI_LANG_MAP:
-            return
+    prompt = f"Translate this message to {target_lang}: \"{original_message}\""
 
-        # Отримуємо оригінальне повідомлення
-        channel = event["item"]["channel"]
-        timestamp = event["item"]["ts"]
-
-        original_message_response = client.conversations_history(channel=channel, latest=timestamp, inclusive=True, limit=1)
-        original_text = original_message_response["messages"][0]["text"]
-
-        target_lang = EMOJI_LANG_MAP[emoji]
-
-        logger.info(f"Translating to: {target_lang}")
-
-        prompt = f"Translate this message to {target_lang}:
-\n" + original_text
-
-        completion = openai_client.chat.completions.create(
-            model="gpt-4",
+    try:
+        chat_response = openai_client.chat.completions.create(
+            model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "You are a translation assistant."},
+                {"role": "system", "content": "You are a helpful assistant that translates messages."},
                 {"role": "user", "content": prompt}
-            ]
+            ],
+            temperature=0.3
+        )
+        translated_text = chat_response.choices[0].message.content.strip()
+
+        client.chat_postMessage(
+            channel=user,
+            text=f"Translated to {target_lang}:\n{translated_text}"
         )
 
-        translated_text = completion.choices[0].message.content.strip()
-
-        # Надсилаємо переклад в приват користувачу
-        user = event["user"]
-        client.chat_postMessage(channel=user, text=f"Переклад на {target_lang}:\n{translated_text}")
-
     except Exception as e:
-        logger.error(f"Error during translation: {e}")
+        logger.error(f"Translation failed: {e}")
 
-# Запуск Socket Mode
-if __name__ == "__main__":
-    handler = SocketModeHandler(app, os.environ.get("SLACK_APP_TOKEN"))
+# Run Flask + Slack bot in parallel
+def start_socket_mode():
+    handler = SocketModeHandler(app, SLACK_APP_TOKEN)
     handler.start()
+
+if __name__ == "__main__":
+    thread = Thread(target=start_socket_mode)
+    thread.start()
+    flask_app.run(host="0.0.0.0", port=PORT)

@@ -22,7 +22,7 @@ app = App(token=os.environ["SLACK_BOT_TOKEN"])
 # Мапа емодзі до мов
 LANGUAGE_EMOJIS = {
     "🇬🇧": "en",
-    ":flag-ua:": "uk",
+    "🇺🇦": ":flag-ua:",
     "🇷🇺": "ru",
 }
 

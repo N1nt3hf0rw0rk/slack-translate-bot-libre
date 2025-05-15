@@ -30,7 +30,7 @@ client = WebClient(token=os.environ.get("SLACK_BOT_TOKEN"))
 # --- Emoji to language code mapping ---
 EMOJI_LANGUAGE_MAP = {
     "ua": "UA",  # Ukrainian
-    "gb": "EN-GB",  # English (British flag)
+    "flag-gb": "EN-GB",  # English (British flag)
     "us": "EN-US",     # ✅ Альтернатива
     "ru": "RU",  # Russian
 }

@@ -29,19 +29,26 @@ LANGUAGE_EMOJIS = {
 # Функція перекладу через LibreTranslate
 def translate(text, target_lang):
     try:
-        url = "https://translate.astian.org/translate"
+        url = "https://api-free.deepl.com/v2/translate"
         headers = {
-            "Content-Type": "application/json",
+            "Content-Type": "application/x-www-form-urlencoded"
         }
         payload = {
-            "q": text,
-            "source": "auto",
-            "target": target_lang,
-            "format": "text"
+            "auth_key": os.environ["DEEPL_API_KEY"],
+            "text": text,
+            "target_lang": target_lang.upper()  # DeepL очікує 'EN', 'UK', 'RU' і т.п.
         }
 
-        response = requests.post(url, headers=headers, json=payload, timeout=10)
+        response = requests.post(url, data=payload, headers=headers, timeout=10)
 
+        if response.status_code != 200:
+            return f"[Translation error: {response.status_code} - {response.text}]"
+
+        result = response.json()
+        return result["translations"][0]["text"]
+    except Exception as e:
+        return f"[Translation error: {e}]"
+        
         # Додай логування для діагностики
         if response.status_code != 200:
             return f"[Translation error: {response.status_code} - {response.text}]"

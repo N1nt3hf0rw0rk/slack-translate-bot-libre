@@ -1,2 +1,4 @@
 slack_bolt
-requests
+slack_sdk
+Flask
+deep-translator

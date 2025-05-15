@@ -1,72 +1,15 @@
 import os
-import logging
 import threading
 import http.server
 import socketserver
-
-from flask import Flask, request
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
-from slack_bolt.adapter.flask import SlackRequestHandler
+from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
-from deep_translator import GoogleTranslator
+from googletrans import Translator
+import logging
 
-# Логування
-logging.basicConfig(level=logging.INFO)
-
-# Slack App
-app = App(token=os.environ.get("SLACK_BOT_TOKEN"))
-handler = SlackRequestHandler(app)
-
-# Flask
-flask_app = Flask(__name__)
-
-# Емодзі → мова
-emoji_to_lang = {
-    "uk": "ukrainian",
-    "gb": "english",
-    "ru": "russian",
-}
-
-@app.event("reaction_added")
-def handle_reaction_added(event, say, client, logger):
-    reaction = event["reaction"]
-    logger.info(f"Отримано реакцію: {reaction}")
-
-    target_lang = EMOJI_TO_LANG.get(reaction)
-    if not target_lang:
-        logger.info(f"Емодзі '{reaction}' не підтримується.")
-        return
-
-    channel = event["item"]["channel"]
-    timestamp = event["item"]["ts"]
-
-    try:
-        result = client.conversations_history(channel=channel, latest=timestamp, inclusive=True, limit=1)
-        original_message = result["messages"][0].get("text")
-
-        if not original_message:
-            logger.info("Не знайдено текст повідомлення.")
-            return
-
-        translated = GoogleTranslator(source="auto", target=target_lang).translate(original_message)
-
-        say(
-            text=f":{reaction}: Переклад ({target_lang}):\n{translated}",
-            thread_ts=timestamp,
-            reply_broadcast=False,
-        )
-
-    except SlackApiError as e:
-        logger.error(f"Slack API помилка: {e.response['error']}")
-    except Exception as e:
-        logger.error(f"Інша помилка: {str(e)}")
-
-@flask_app.route("/slack/events", methods=["POST"])
-def slack_events():
-    return handler.handle(request)
-
-# --- Псевдо-сервер на 8080 для Render ---
+# 🔧 Fake HTTP server для Render
 def run_fake_server():
     PORT = 8080
     Handler = http.server.SimpleHTTPRequestHandler
@@ -74,14 +17,73 @@ def run_fake_server():
         print(f"Serving fake HTTP server on port {PORT}")
         httpd.serve_forever()
 
-# --- Запуск ---
+threading.Thread(target=run_fake_server, daemon=True).start()
+
+# 🧠 Ініціалізація Slack та Google Translate
+app = App(token=os.environ["SLACK_BOT_TOKEN"])
+translator = Translator()
+client = WebClient(token=os.environ["SLACK_BOT_TOKEN"])
+
+# ✅ Мапа емодзі до ISO-кодів мов (а не назв)
+emoji_to_lang = {
+    "uk": "uk",  # українська
+    "gb": "en",  # англійська
+    "ru": "ru",  # російська
+}
+
+# 📝 Налаштування логування
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+@app.event("reaction_added")
+def handle_reaction(event, say):
+    reaction = event["reaction"].strip(":")
+    item = event["item"]
+    user_id = event["user"]
+
+    logger.info(f"handle_reaction_added:Отримано реакцію: {reaction}")
+
+    # 🎯 Визначаємо цільову мову
+    target_lang_code = emoji_to_lang.get(reaction)
+    if not target_lang_code:
+        logger.info(f"Ігноровано реакцію: {reaction}")
+        return
+
+    try:
+        channel_id = item["channel"]
+        message_ts = item["ts"]
+
+        # 📩 Отримуємо оригінальне повідомлення
+        result = client.conversations_history(
+            channel=channel_id, latest=message_ts, limit=1, inclusive=True
+        )
+        messages = result["messages"]
+        if not messages:
+            logger.error("Повідомлення не знайдено.")
+            return
+
+        original_text = messages[0].get("text", "")
+        if not original_text:
+            logger.info("Порожній текст.")
+            return
+
+        # 🌐 Переклад
+        translated = translator.translate(original_text, dest=target_lang_code).text
+
+        # 📨 Надсилання приватного повідомлення
+        im = client.conversations_open(users=user_id)
+        dm_channel = im["channel"]["id"]
+
+        client.chat_postMessage(
+            channel=dm_channel,
+            text=f":repeat: Переклад ({target_lang_code}):\n{translated}"
+        )
+
+    except SlackApiError as e:
+        logger.error(f"Slack API error: {e.response['error']}")
+    except Exception as ex:
+        logger.exception(f"Unexpected error: {ex}")
+
+# ▶️ Запуск
 if __name__ == "__main__":
-    threading.Thread(target=run_fake_server, daemon=True).start()
-
-    mode = os.environ.get("APP_ENV", "socket")
-
-    if mode == "web":
-        port = int(os.environ.get("PORT", 3000))
-        flask_app.run(host="0.0.0.0", port=port)
-    else:
-        SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"]).start()
+    SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"]).start()

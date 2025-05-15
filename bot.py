@@ -28,7 +28,7 @@ def health_check():
 # Emoji-to-language map
 EMOJI_TO_LANG = {
     "gb": "English",
-    "ua": "Ukrainian",
+    "ua": "Ukrainian language",
     "ru": "Russian"
 }
 

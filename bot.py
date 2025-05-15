@@ -12,87 +12,68 @@ def run_fake_server():
 threading.Thread(target=run_fake_server, daemon=True).start()
 
 import os
+import logging
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
-import requests
+from slack_sdk.errors import SlackApiError
+from deep_translator import GoogleTranslator
 
-# Ініціалізація Slack App
-app = App(token=os.environ["SLACK_BOT_TOKEN"])
+# Логування
+logging.basicConfig(level=logging.INFO)
 
-# Мапа емодзі до мов (Slack передає емодзі як 'flag-ua' тощо)
-LANGUAGE_EMOJIS = {
+# Ініціалізація додатку Slack
+app = App(token=os.environ.get("SLACK_BOT_TOKEN"))
+
+# Мапа емодзі до мов
+EMOJI_TO_LANG = {
+    "repeat": "uk",
+    "gb": "en",
     "flag-gb": "en",
-    "flag-ua": "uk",
+    "🇬🇧": "en",
+    "ru": "ru",
     "flag-ru": "ru",
+    "🇷🇺": "ru",
 }
 
-# Функція перекладу через LibreTranslate
-def translate(text, target_lang):
-    try:
-        url = "https://api-free.deepl.com/v2/translate"
-        headers = {
-            "Content-Type": "application/x-www-form-urlencoded"
-        }
-        payload = {
-            "auth_key": os.environ["DEEPL_API_KEY"],
-            "text": text,
-            "target_lang": target_lang.upper()  # DeepL очікує 'EN', 'UK', 'RU' і т.п.
-        }
-
-        response = requests.post(url, data=payload, headers=headers, timeout=10)
-
-        if response.status_code != 200:
-            return f"[Translation error: {response.status_code} - {response.text}]"
-
-        result = response.json()
-        return result["translations"][0]["text"]
-    except Exception as e:
-        return f"[Translation error: {e}]"
-        
-        # Додай логування для діагностики
-        if response.status_code != 200:
-            return f"[Translation error: {response.status_code} - {response.text}]"
-
-        return response.json().get("translatedText", "[Translation failed]")
-    except Exception as e:
-        return f"[Translation error: {e}]"
-
-# Обробник події додавання емодзі
 @app.event("reaction_added")
 def handle_reaction_added(event, say, client, logger):
-    emoji = event["reaction"]
-    user_id = event["user"]
+    reaction = event["reaction"]
+    logger.info(f"Отримано реакцію: {reaction}")
+
+    # Перевірка чи емодзі відповідає мові
+    target_lang = EMOJI_TO_LANG.get(reaction)
+    if not target_lang:
+        logger.info(f"Емодзі '{reaction}' не підтримується.")
+        return
+
     channel = event["item"]["channel"]
     timestamp = event["item"]["ts"]
 
-    logger.info(f"Reaction added: {emoji} by user {user_id} on message {timestamp}")
-
-    if emoji not in LANGUAGE_EMOJIS:
-        return
-
     try:
-        # Отримання оригінального повідомлення
-        response = client.conversations_history(
-            channel=channel,
-            latest=timestamp,
-            limit=1,
-            inclusive=True
-        )
-        original_msg = response["messages"][0]["text"]
+        # Отримання повідомлення, на яке поставили реакцію
+        result = client.conversations_history(channel=channel, latest=timestamp, inclusive=True, limit=1)
+        original_message = result["messages"][0].get("text")
 
-        target_lang = LANGUAGE_EMOJIS[emoji]
-        translated = translate(original_msg, target_lang)
+        if not original_message:
+            logger.info("Не знайдено текст повідомлення.")
+            return
 
-        # Надсилання результату у DM користувачу
-        client.chat_postMessage(
-            channel=user_id,
-            text=f"🔁 Переклад ({target_lang}):\n{translated}"
+        # Визначення мови оригіналу автоматично
+        translated = GoogleTranslator(source="auto", target=target_lang).translate(original_message)
+
+        # Надсилання перекладеного повідомлення
+        say(
+            text=f":{reaction}: Переклад ({target_lang}):\n{translated}",
+            thread_ts=timestamp,
+            reply_broadcast=False,
         )
+
+    except SlackApiError as e:
+        logger.error(f"Slack API помилка: {e.response['error']}")
     except Exception as e:
-        logger.error(f"Error: {e}")
+        logger.error(f"Інша помилка: {str(e)}")
 
-# Запуск бота через Socket Mode
+
 if __name__ == "__main__":
     handler = SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"])
-    print("⚡️ Slack bot is running!")
     handler.start()

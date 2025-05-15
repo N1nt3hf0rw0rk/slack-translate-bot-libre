@@ -2,4 +2,5 @@ slack-bolt
 slack-sdk
 Flask
 requests
-deepl
+openai
+python-dotenv

@@ -2,14 +2,14 @@ import os
 import threading
 import http.server
 import socketserver
+import requests
+import deepl
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
-from googletrans import Translator
-import logging
 
-# 🔧 Fake HTTP server для Render
+# --- Fake HTTP server for Render ---
 def run_fake_server():
     PORT = 8080
     Handler = http.server.SimpleHTTPRequestHandler
@@ -19,71 +19,61 @@ def run_fake_server():
 
 threading.Thread(target=run_fake_server, daemon=True).start()
 
-# 🧠 Ініціалізація Slack та Google Translate
-app = App(token=os.environ["SLACK_BOT_TOKEN"])
-translator = Translator()
-client = WebClient(token=os.environ["SLACK_BOT_TOKEN"])
+# --- DeepL Translator ---
+DEEPL_API_KEY = os.environ.get("DEEPL_API_KEY")
+translator = deepl.Translator(auth_key=DEEPL_API_KEY)
 
-# ✅ Мапа емодзі до ISO-кодів мов (а не назв)
-emoji_to_lang = {
-    "uk": "uk",  # українська
-    "gb": "en",  # англійська
-    "ru": "ru",  # російська
+# --- Slack App ---
+app = App(token=os.environ.get("SLACK_BOT_TOKEN"))
+client = WebClient(token=os.environ.get("SLACK_BOT_TOKEN"))
+
+# --- Emoji to language code mapping ---
+EMOJI_LANGUAGE_MAP = {
+    "ua": "UK",  # Ukrainian
+    "gb": "EN",  # English (British flag)
+    "ru": "RU",  # Russian
 }
 
-# 📝 Налаштування логування
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
 @app.event("reaction_added")
-def handle_reaction(event, say):
-    reaction = event["reaction"].strip(":")
-    item = event["item"]
-    user_id = event["user"]
+def handle_reaction_added(event, say, logger):
+    reaction = event.get("reaction")
+    item = event.get("item")
+    user = event.get("user")
 
-    logger.info(f"handle_reaction_added:Отримано реакцію: {reaction}")
-
-    # 🎯 Визначаємо цільову мову
-    target_lang_code = emoji_to_lang.get(reaction)
-    if not target_lang_code:
-        logger.info(f"Ігноровано реакцію: {reaction}")
-        return
+    if reaction not in EMOJI_LANGUAGE_MAP:
+        return  # Ignore unrelated reactions
 
     try:
-        channel_id = item["channel"]
-        message_ts = item["ts"]
-
-        # 📩 Отримуємо оригінальне повідомлення
-        result = client.conversations_history(
-            channel=channel_id, latest=message_ts, limit=1, inclusive=True
+        # Get original message
+        response = client.conversations_history(
+            channel=item["channel"],
+            inclusive=True,
+            latest=item["ts"],
+            limit=1
         )
-        messages = result["messages"]
-        if not messages:
-            logger.error("Повідомлення не знайдено.")
+
+        if not response["messages"]:
             return
 
-        original_text = messages[0].get("text", "")
+        original_text = response["messages"][0].get("text", "")
         if not original_text:
-            logger.info("Порожній текст.")
             return
 
-        # 🌐 Переклад
-        translated = translator.translate(original_text, dest=target_lang_code).text
+        target_lang = EMOJI_LANGUAGE_MAP[reaction]
 
-        # 📨 Надсилання приватного повідомлення
-        im = client.conversations_open(users=user_id)
-        dm_channel = im["channel"]["id"]
+        # Translate
+        result = translator.translate_text(original_text, target_lang=target_lang)
 
+        # Send as private message
         client.chat_postMessage(
-            channel=dm_channel,
-            text=f":repeat: Переклад ({target_lang_code}):\n{translated}"
+            channel=user,
+            text=f":repeat: Переклад ({target_lang.lower()}):\n{result.text}"
         )
 
     except SlackApiError as e:
         logger.error(f"Slack API error: {e.response['error']}")
-    except Exception as ex:
-        logger.exception(f"Unexpected error: {ex}")
+    except Exception as e:
+        logger.error(f"Error during translation: {str(e)}")
 
-# ▶️ Запуск
 if __name__ == "__main__":
     SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"]).start()

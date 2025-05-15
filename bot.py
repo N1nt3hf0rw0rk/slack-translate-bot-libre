@@ -7,7 +7,6 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 from slack_sdk.errors import SlackApiError
 import openai
 
-# Запускаємо фейковий HTTP сервер (обхід Render портів)
 def run_fake_server():
     PORT = 8080
     Handler = http.server.SimpleHTTPRequestHandler
@@ -17,21 +16,18 @@ def run_fake_server():
 
 threading.Thread(target=run_fake_server, daemon=True).start()
 
-# Словник емоджі до коду мов ISO
 EMOJI_TO_LANG = {
     "gb": "en",
     "uk": "uk",
     "ru": "ru",
 }
 
-# Відповідність коду мови до людської назви
 LANG_CODE_TO_NAME = {
     "en": "English",
     "uk": "Ukrainian",
     "ru": "Russian",
 }
 
-# Ініціалізація Slack app
 app = App(token=os.environ.get("SLACK_BOT_TOKEN"))
 openai.api_key = os.environ.get("OPENAI_API_KEY")
 
@@ -54,22 +50,23 @@ def translate_text(text: str, target_lang_code: str) -> str:
         print(f"Error during translation: {e}")
         return None
 
-# Слухаємо реакції на повідомлення
 @app.event("reaction_added")
 def handle_reaction(event, client):
+    print("Received reaction_added event:", event)
     emoji = event.get("reaction")
+    print(f"Reaction emoji: {emoji}")
     user_who_reacted = event.get("user")
     item = event.get("item")
     channel_id = item.get("channel")
     message_ts = item.get("ts")
 
     if emoji not in EMOJI_TO_LANG:
+        print("Emoji not in the translation list, skipping.")
         return
 
     target_lang_code = EMOJI_TO_LANG[emoji]
 
     try:
-        # Отримуємо оригінальний текст повідомлення
         result = client.conversations_history(channel=channel_id, latest=message_ts, inclusive=True, limit=1)
         messages = result.get("messages", [])
         if not messages:
@@ -85,7 +82,6 @@ def handle_reaction(event, client):
             print("Translation failed.")
             return
 
-        # Надсилаємо переклад у приватні повідомлення користувачу, який поставив реакцію
         client.chat_postMessage(channel=user_who_reacted, text=f":repeat: Переклад ({target_lang_code}):\n{translation}")
 
     except SlackApiError as e:
